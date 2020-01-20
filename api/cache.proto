@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package api;
+
+service Cache {
+    rpc GetRandomDataStream (RandomDataArg) returns (stream RandomData) {
+    }
+}
+
+message RandomDataArg {
+}
+
+message RandomData {
+    string str = 1;
+}

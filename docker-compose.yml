@@ -1,0 +1,41 @@
+version: '3'
+
+services:
+  redis:
+    image: redis
+    container_name: redis
+    #    ports:
+    #      - 6379:6379
+    expose:
+      - 6379
+    networks:
+      - two-services
+
+  cache:
+    image: 2services-cache
+    #    container_name: cache
+    environment:
+      - REDIS=redis:6379
+    #    ports:
+    #      - 9090:9090
+    expose:
+      - 9000
+    networks:
+      - two-services
+    depends_on:
+      - redis
+
+  consumer:
+    image: 2services-consumer
+    #    container_name: consumer
+    environment:
+      - CACHE=cache:9090
+    #    ports:
+    #      - 8080:8080
+    networks:
+      - two-services
+    depends_on:
+      - cache
+
+networks:
+  two-services:
