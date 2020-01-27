@@ -8,7 +8,12 @@ import (
 	"syscall"
 )
 
+const App string = "2Services. Consumer service"
+const version string = "0.2.1"
+
 func main() {
+	log.Printf("%s. Version %s", App, version)
+
 	cacheServiceAddress := flag.String("cache", "localhost:9090", "<host>:<port>")
 	argMin := flag.Int64("argMin", 0, "lower bound for randomly generated arg, used for requesting cache service. Int64")
 	argMax := flag.Int64("argMax", 1000, "upper bound for randomly generated arg, used for requesting cache service. Int64")

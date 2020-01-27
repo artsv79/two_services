@@ -11,7 +11,12 @@ import (
 	"time"
 )
 
+const App string = "2Services. Cache service"
+const version string = "0.2.1"
+
 func main() {
+	log.Printf("%s. Version %s", App, version)
+
 	redisAddress := flag.String("redis", "localhost:6379", "<host>:<port>")
 	flag.Parse()
 	log.Printf("DB address to connect to: %s", *redisAddress)

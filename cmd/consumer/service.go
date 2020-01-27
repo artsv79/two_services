@@ -36,7 +36,7 @@ func (c *ConsumerService) Dial(address string) error {
 	attempts := 1
 
 	for {
-		ctx, cancelDial := context.WithTimeout(context.TODO(), 10*time.Second)
+		ctx, cancelDial := context.WithTimeout(context.TODO(), 40*time.Second)
 		go func() {
 			var err error
 
@@ -122,6 +122,7 @@ func (c *ConsumerService) requestOnce(groupSync *sync.WaitGroup, requestArg int6
 	var requestArgStr string
 	var headerReceived bool = false
 	var totalReceived int = 0
+
 iteratingAnswers:
 	for {
 		select {
