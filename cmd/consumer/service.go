@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"github.com/artsv79/two_services/api"
 	"google.golang.org/grpc"
 	"io"
@@ -14,17 +15,15 @@ import (
 type ConsumerService struct {
 	*grpc.ClientConn
 
-	stop             <-chan interface{}
-	client           api.CacheClient
-	numberOfRequests int
-	requestTimeout   time.Duration
+	stop           <-chan interface{}
+	client         api.CacheClient
+	requestTimeout time.Duration
 }
 
 func NewConsumer(stop <-chan interface{}) *ConsumerService {
 	c := &ConsumerService{
-		stop:             stop,
-		numberOfRequests: 1000,
-		requestTimeout:   30 * time.Second,
+		stop:           stop,
+		requestTimeout: 30 * time.Second,
 	}
 	return c
 }
@@ -66,12 +65,14 @@ func (c *ConsumerService) Dial(address string) error {
 	}
 }
 
-func (c *ConsumerService) Run(argLowerBound, argUpperBound int64) {
+func (c *ConsumerService) Run(argLowerBound, argUpperBound int64, numberOfRequests int) {
 	defer c.Close()
+
+	rand.Seed(time.Now().UnixNano())
 
 	var groupSync sync.WaitGroup
 
-	for i := 0; i < c.numberOfRequests; i++ {
+	for i := 0; i < numberOfRequests; i++ {
 
 		var randomArg int64 = argLowerBound
 		if argLowerBound < argUpperBound {
@@ -82,9 +83,9 @@ func (c *ConsumerService) Run(argLowerBound, argUpperBound int64) {
 		go c.requestOnce(&groupSync, randomArg)
 	}
 
-	log.Printf("Waiting for all requests to complete...")
+	log.Printf("Waiting for all %d requests to complete...", numberOfRequests)
 	groupSync.Wait()
-	log.Printf("All %d requests finished", c.numberOfRequests)
+	log.Printf("All %d requests finished", numberOfRequests)
 }
 
 func (c *ConsumerService) requestOnce(groupSync *sync.WaitGroup, requestArg int64) {
@@ -116,6 +117,11 @@ func (c *ConsumerService) requestOnce(groupSync *sync.WaitGroup, requestArg int6
 		}
 	}()
 
+	var answer string
+	var contentSource string
+	var requestArgStr string
+	var headerReceived bool = false
+	var totalReceived int = 0
 iteratingAnswers:
 	for {
 		select {
@@ -123,12 +129,31 @@ iteratingAnswers:
 			cancelStream()
 			log.Printf("Stop signal received, canceling request...")
 			break iteratingAnswers
-		case answer, ok := <-answerChan:
+		case answerPart, ok := <-answerChan:
 			if ok {
-				log.Printf("RECV: (%d), \"%.10s ...\"", len(answer), answer)
+				totalReceived += len(answerPart)
+				if !headerReceived {
+					answer += answerPart
+				}
+				if len(answer) >= 30 {
+					headerReceived = true
+					contentSource = answer[:10]
+					requestArgStr = answer[10:30]
+				}
 			} else {
+				log.Printf("RECEIVED: %s (%d), \"%.30s ...\"", contentSource, totalReceived, answer)
+				var receivedArg int64
+				n, err := fmt.Sscanf(requestArgStr, "%d", &receivedArg)
+				if n == 1 {
+					if receivedArg != requestArg {
+						log.Printf("ERROR: received wrong request: mine = %d, received = %d.       ----------------------------------- ####", requestArg, receivedArg)
+					}
+				} else {
+					log.Printf("ERROR: Error parsing receivedArg from content: %v", err)
+				}
 				break iteratingAnswers
 			}
 		}
 	}
+
 }

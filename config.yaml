@@ -1,3 +1,3 @@
 MinTimeout: 60
 MaxTimeout: 60
-StreamLen: 2
+StreamLen: 50000

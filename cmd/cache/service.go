@@ -75,12 +75,12 @@ func (p *CacheService) getUrlContent(url string) (string, error) {
 
 		p.cacheDb.StoreAndUnlock(url, content, ttl, lock)
 
-		return content, nil
+		return "generated:" + content, nil
 	} else if err != nil {
 		return "", err
 	} else {
 		// return content from cache
-		return content, nil
+		return "cached   :" + content, nil
 	}
 }
 
