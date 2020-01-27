@@ -1,4 +1,4 @@
-module github.com/artsv79/2services
+module github.com/artsv79/two_services
 
 go 1.13
 

@@ -8,11 +8,10 @@ import (
 )
 
 type Config struct {
-	URLs             []string `yaml:"URLs"`
-	MinTimeout       int      `yaml:"MinTimeout"`
-	MaxTimeout       int      `yaml:"MaxTimeout"`
-	NumberOfRequests int      `yaml:"NumberOfRequests"`
-	dbAddress        string
+	MinTimeout int `yaml:"MinTimeout"`
+	MaxTimeout int `yaml:"MaxTimeout"`
+	StreamLen  int `yaml:"StreamLen"`
+	dbAddress  string
 }
 
 func ReadConfig() Config {
@@ -30,19 +29,11 @@ func ReadConfig() Config {
 }
 
 func (c *Config) Validate() error {
-	if c.URLs == nil || len(c.URLs) == 0 {
-		return errors.New("non-empty URL list should be provided")
-	}
-	for _, u := range c.URLs {
-		if len(u) == 0 {
-			return errors.New("ULR is empty")
-		}
-	}
 	if !(c.MaxTimeout >= c.MinTimeout && c.MinTimeout > 0) {
 		return errors.New("expected that MaxTimeout >= c.MinTimeout AND c.MinTimeout > 0")
 	}
-	if c.NumberOfRequests <= 0 {
-		return errors.New("expected that numberOfRequests >= 1")
+	if c.StreamLen <= 0 {
+		return errors.New("expected that StreamLen > 0")
 	}
 	if len(c.dbAddress) == 0 {
 		return errors.New("expected Redis db address")

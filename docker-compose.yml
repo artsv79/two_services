@@ -16,6 +16,8 @@ services:
     #    container_name: cache
     environment:
       - REDIS=redis:6379
+      - ARG_MIN=1
+      - ARG_MAX=1000
     #    ports:
     #      - 9090:9090
     expose:

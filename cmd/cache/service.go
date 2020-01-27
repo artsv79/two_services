@@ -1,13 +1,13 @@
 package main
 
 import (
-	"github.com/artsv79/2services/api"
+	"fmt"
+	"github.com/artsv79/two_services/api"
 	"google.golang.org/grpc"
 	"io"
 	"log"
 	"math/rand"
 	"net/http"
-	"sync/atomic"
 	"time"
 )
 
@@ -39,39 +39,20 @@ func NewCache(config Config) *CacheService {
 
 func (p *CacheService) GetRandomDataStream(input *api.RandomDataArg, server api.Cache_GetRandomDataStreamServer) error {
 
-	log.Printf("Received some")
+	log.Printf("Received request for arg: %d", input.Arg)
 
-	_ = input // input is not used for now
-
-	ch := make(chan string, p.config.NumberOfRequests)
-
-	var startedRequests int32
-	for i := 0; i < p.config.NumberOfRequests; i++ {
-		atomic.AddInt32(&startedRequests, 1)
-		go func(i int) {
-			url := p.config.URLs[rand.Int31n(int32(len(p.config.URLs)))]
-
-			str, err := p.getUrlContent(url)
-			if err != nil {
-				log.Printf("Error getting URL: %v", err)
-				ch <- err.Error()
-			} else {
-				ch <- str
-			}
-
-			if atomic.AddInt32(&startedRequests, -1) == 0 {
-				close(ch)
-			}
-		}(i)
+	url := fmt.Sprintf("%020d", input.Arg)
+	str, err := p.getUrlContent(url)
+	if err != nil {
+		log.Printf("Error getting URL: %v", err)
+		str = fmt.Sprintf("%v", err)
 	}
 
-	for str := range ch {
-		err := server.Send(&api.RandomData{
-			Str: str,
-		})
-		if err != nil {
-			return err
-		}
+	err = server.Send(&api.RandomData{
+		Str: str,
+	})
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -80,18 +61,17 @@ func (p *CacheService) GetRandomDataStream(input *api.RandomDataArg, server api.
 func (p *CacheService) getUrlContent(url string) (string, error) {
 	content, lock, err := p.cacheDb.GetOrLock(url, p.downloadTTL+100*time.Millisecond)
 	if lock != nil {
-		// really download content
+		// generate content
 		var ttl time.Duration
-		content, err = p.downloadURLContent(url, p.downloadTTL)
-		if err != nil {
-			content = err.Error()
-			// set minimal TTL
-			ttl = time.Duration(p.config.MinTimeout) * time.Second
-		} else {
-			//set random TTL
-			ttlRange := p.config.MaxTimeout - p.config.MinTimeout
-			ttl = time.Duration(p.config.MinTimeout+rand.Intn(ttlRange+1)) * time.Second
+		//set random TTL
+		ttlRange := p.config.MaxTimeout - p.config.MinTimeout
+		ttl = time.Duration(p.config.MinTimeout+rand.Intn(ttlRange+1)) * time.Second
+
+		strBuf := make([]byte, 0, 20*p.config.StreamLen)
+		for i := 0; i < p.config.StreamLen; i++ {
+			strBuf = append(strBuf, url...)
 		}
+		content = string(strBuf)
 
 		p.cacheDb.StoreAndUnlock(url, content, ttl, lock)
 
@@ -99,6 +79,7 @@ func (p *CacheService) getUrlContent(url string) (string, error) {
 	} else if err != nil {
 		return "", err
 	} else {
+		// return content from cache
 		return content, nil
 	}
 }

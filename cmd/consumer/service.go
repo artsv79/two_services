@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
-	"github.com/artsv79/2services/api"
+	"github.com/artsv79/two_services/api"
 	"google.golang.org/grpc"
 	"io"
 	"log"
+	"math/rand"
 	"sync"
 	"time"
 )
@@ -65,14 +66,20 @@ func (c *ConsumerService) Dial(address string) error {
 	}
 }
 
-func (c *ConsumerService) Run() {
+func (c *ConsumerService) Run(argLowerBound, argUpperBound int64) {
 	defer c.Close()
 
 	var groupSync sync.WaitGroup
 
 	for i := 0; i < c.numberOfRequests; i++ {
+
+		var randomArg int64 = argLowerBound
+		if argLowerBound < argUpperBound {
+			randomArg = rand.Int63n(argUpperBound-argLowerBound) + argLowerBound
+		}
+
 		groupSync.Add(1)
-		go c.requestOnce(&groupSync)
+		go c.requestOnce(&groupSync, randomArg)
 	}
 
 	log.Printf("Waiting for all requests to complete...")
@@ -80,7 +87,7 @@ func (c *ConsumerService) Run() {
 	log.Printf("All %d requests finished", c.numberOfRequests)
 }
 
-func (c *ConsumerService) requestOnce(groupSync *sync.WaitGroup) {
+func (c *ConsumerService) requestOnce(groupSync *sync.WaitGroup, requestArg int64) {
 	defer groupSync.Done()
 
 	log.Printf("Requesting stream...")
@@ -91,7 +98,7 @@ func (c *ConsumerService) requestOnce(groupSync *sync.WaitGroup) {
 	go func() {
 		defer close(answerChan)
 
-		stream, err := c.client.GetRandomDataStream(ctx, &api.RandomDataArg{})
+		stream, err := c.client.GetRandomDataStream(ctx, &api.RandomDataArg{Arg: requestArg})
 		if err != nil {
 			log.Printf("Error readin from Cache service: %v", err)
 		} else {
