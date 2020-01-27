@@ -9,8 +9,14 @@ import (
 	"log"
 	"math/rand"
 	"sync"
+	"sync/atomic"
 	"time"
 )
+
+type Stat struct {
+	content string
+	error   error
+}
 
 type ConsumerService struct {
 	*grpc.ClientConn
@@ -18,6 +24,8 @@ type ConsumerService struct {
 	stop           <-chan interface{}
 	client         api.CacheClient
 	requestTimeout time.Duration
+
+	generated, cached, errors int32
 }
 
 func NewConsumer(stop <-chan interface{}) *ConsumerService {
@@ -72,6 +80,8 @@ func (c *ConsumerService) Run(argLowerBound, argUpperBound int64, numberOfReques
 
 	var groupSync sync.WaitGroup
 
+	startTime := time.Now()
+
 	for i := 0; i < numberOfRequests; i++ {
 
 		var randomArg int64 = argLowerBound
@@ -85,7 +95,9 @@ func (c *ConsumerService) Run(argLowerBound, argUpperBound int64, numberOfReques
 
 	log.Printf("Waiting for all %d requests to complete...", numberOfRequests)
 	groupSync.Wait()
-	log.Printf("All %d requests finished", numberOfRequests)
+	finishTime := time.Now()
+	log.Printf("All %d requests finished. Time spent: %v", numberOfRequests, finishTime.Sub(startTime))
+	log.Printf("Results: generated: %d, cached: %d, errors: %d.   Total: %d", c.generated, c.cached, c.errors, c.generated+c.cached+c.errors)
 }
 
 func (c *ConsumerService) requestOnce(groupSync *sync.WaitGroup, requestArg int64) {
@@ -132,8 +144,16 @@ iteratingAnswers:
 			break iteratingAnswers
 		case answerPart, ok := <-answerChan:
 			if ok {
+				// answer will be stream of strings, which are parts of one big string.
+				// this big string normally should have format {"generated"|"cached   "}:<requestArg><requestArg>...
+				// where <requestArg> repeated N times (configured in cache service - StreamLen)
+				// "generated:000000000000000045320000000000000000453200000000000000004532..."
+				// "cached   :000000000000000045320000000000000000453200000000000000004532..."
+
 				totalReceived += len(answerPart)
 				if !headerReceived {
+					// we are interested only in initial part of the answer,
+					// where "generated" or "cached" word placed (10 chars) and which contains requestArg (+ 20 chars).
 					answer += answerPart
 				}
 				if len(answer) >= 30 {
@@ -157,4 +177,12 @@ iteratingAnswers:
 		}
 	}
 
+	switch contentSource {
+	case "generated:":
+		atomic.AddInt32(&c.generated, 1)
+	case "cached   :":
+		atomic.AddInt32(&c.cached, 1)
+	default:
+		atomic.AddInt32(&c.errors, 1)
+	}
 }

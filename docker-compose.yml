@@ -31,8 +31,8 @@ services:
     environment:
       - CACHE=cache:9090
       - ARG_MIN=1
-      - ARG_MAX=7000
-      - REQUESTS_NUM=20000
+      - ARG_MAX=4000
+      - REQUESTS_NUM=4000
     #    ports:
     #      - 8080:8080
     networks:

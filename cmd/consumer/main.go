@@ -9,7 +9,7 @@ import (
 )
 
 const App string = "2Services. Consumer service"
-const version string = "0.2.1"
+const version string = "0.2.4"
 
 func main() {
 	log.Printf("%s. Version %s", App, version)
