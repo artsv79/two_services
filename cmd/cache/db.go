@@ -6,12 +6,15 @@ import (
 	"github.com/go-redis/redis/v7"
 	"log"
 	"math/rand"
+	"runtime/debug"
 	"time"
 )
 
 type CacheDB interface {
-	GetOrLock(url string, lockTTL time.Duration) (string, Lock, error)
-	StoreAndUnlock(url string, content string, ttl time.Duration, lock Lock)
+	GetOrLock(url string, lockTTL time.Duration) (chan string, Lock, error)
+	// don't close this writer chan. Use Unlock instead fo mark the and of stream
+	WriterForLocked(lock Lock) (chan string, error)
+	Unlock(lock Lock, ttl time.Duration) error
 }
 
 type Lock interface {
@@ -49,6 +52,7 @@ type RedisCacheLock struct {
 	lockId     string
 	key        string
 	contentKey string
+	writeChan  chan string
 }
 
 type RedisCacheDB struct {
@@ -56,71 +60,155 @@ type RedisCacheDB struct {
 	maxLockAttempts int
 }
 
-func (r *RedisCacheDB) GetOrLock(url string, lockTTL time.Duration) (string, Lock, error) {
+func (r *RedisCacheDB) GetOrLock(url string, lockTTL time.Duration) (chan string, Lock, error) {
 	log.Printf("Getting URL: %s", url)
 	//key := base64.URLEncoding.EncodeToString(url)
 	key := fmt.Sprintf("(%s)", url)
-	contentKey := fmt.Sprintf("(%s).Content", url)
+	//contentKey := fmt.Sprintf("(%s).Content", url)
 	lockId := r.generateLockId()
+	redisStream, err := r.redisClient.XRead(&redis.XReadArgs{
+		Streams: []string{key, "0-0"},
+		Count:   0,
+		Block:   -1,
+	}).Result()
+	if err == redis.Nil {
 
-	var iterationCount int
-	for {
-		val, err := r.redisClient.Get(contentKey).Result()
-		if err == redis.Nil {
-			log.Printf("Not found in db. getting lock for %s", url)
-			ok, err := r.redisClient.SetNX(key, lockId, lockTTL).Result()
-			if err != nil {
-				return "", nil, err
-			}
-			if ok {
-				log.Printf("Got lock %s for URL %s", lockId, url)
-				return "", &RedisCacheLock{lockId: lockId, key: key, contentKey: contentKey}, nil
-			}
-			iterationCount++
-			if iterationCount > r.maxLockAttempts {
-				return "", nil, errors.New("too many attempts to acquire lock")
-			}
-
-			sleepDuration := lockTTL / 4
-			log.Printf("Failed to get lock (%s), waiting %d seconds to get content or lo", lockId, int(sleepDuration.Seconds()))
-			time.Sleep(sleepDuration)
-		} else if err != nil {
-			return "", nil, err
+		firstId := 1
+		// Empty. No stream for this key
+		_, err := r.redisClient.XAdd(&redis.XAddArgs{
+			Stream: key,
+			ID:     fmt.Sprintf("0-%d", firstId),
+			Values: map[string]interface{}{"initial": "true"},
+		}).Result()
+		if err != nil {
+			log.Printf("Failed to create stream for %s: %v", key, err)
+			//TODO asv: implelent
+			//TODO asv: not return, just retry
+			return nil, nil, err
 		} else {
-			log.Printf("Found in db, len: %d", len(val))
-			return val, nil, nil
+			// Good - we got the lock for this URL
+			log.Printf("Got lock %s for URL %s", lockId, key)
+			//TODO asv: handle timouts
+			wChan := make(chan string)
+			go func() {
+				id := firstId + 1 // next id for redis "XADD", will have form of "0-2", "0-3", and so forth
+				for item := range wChan {
+					//TODO asv: handle errors
+					r.redisClient.XAdd(&redis.XAddArgs{
+						Stream: key,
+						ID:     fmt.Sprintf("0-%d", id),
+						Values: map[string]interface{}{"msg": item},
+					})
+
+					id++
+				}
+				//TODO asv: handle errors
+				r.redisClient.XAdd(&redis.XAddArgs{
+					Stream: key,
+					ID:     fmt.Sprintf("0-%d", id),
+					Values: map[string]interface{}{"finalizer": "true"},
+				})
+			}()
+			return nil, &RedisCacheLock{key: key, writeChan: wChan}, nil
 		}
+	} else if err != nil {
+		// some error - just return it.
+		return nil, nil, err
+	} else {
+		// We got values.
+		readTimeout := lockTTL / 4
+
+		readerChan := make(chan string)
+
+		go func() {
+			defer close(readerChan)
+			processMessages := func(_redisStreams []redis.XStream, previousLatestId string) (lastReceived bool, latestId string) {
+				latestId = previousLatestId
+				lastReceived = false
+
+				if len(_redisStreams) > 0 {
+					for _, message := range _redisStreams[0].Messages {
+						latestId = message.ID
+						if message.Values["initial"] == "true" {
+							//skip
+						} else if message.Values["finalizer"] == "true" {
+							// skip, but return "end" flag
+							lastReceived = true
+							break
+						} else if msg := message.Values["msg"]; msg != nil {
+							stringValue := fmt.Sprintf("%v", msg)
+							readerChan <- stringValue
+						}
+					}
+				}
+				return lastReceived, latestId
+			}
+			iterationCount := 0
+			latestId := "0-0"
+			for {
+				isLast, latestId := processMessages(redisStream, latestId)
+				if isLast {
+					break
+				}
+				redisStream, err = r.redisClient.XRead(&redis.XReadArgs{
+					Streams: []string{key, latestId},
+					Count:   0,
+					Block:   readTimeout,
+				}).Result()
+				if err == redis.Nil {
+					iterationCount++
+					if iterationCount >= 4 {
+						log.Printf("Timeout on waiting stream. Have read up to %s", latestId)
+						break
+					}
+					//TODO asv: implement limited waiting
+				} else if err != nil {
+					//TODO asv: implemetn erro handling
+					log.Printf("Failed to read stream %s: %v", key, err)
+					break
+				} else {
+					iterationCount = 0
+				}
+			}
+		}()
+
+		return readerChan, nil, nil
 	}
 }
 
-func (r *RedisCacheDB) StoreAndUnlock(url string, content string, ttl time.Duration, lock Lock) {
-	redisLock, ok := lock.(*RedisCacheLock)
-	if ok {
-		lockInDb, err := r.redisClient.Get(redisLock.key).Result()
-		if err == nil && lockInDb == redisLock.lockId {
-			pipe := r.redisClient.TxPipeline()
-			pipe.Set(redisLock.key, "ready", ttl)
-			pipe.Set(redisLock.contentKey, content, ttl)
-			_, err := pipe.Exec()
-			if err != nil {
-				log.Printf("Error in storing (%s) content to DB: %v", url, err)
-			} else {
-				log.Printf("Content stored in DB for URL: %s. Len: %d", url, len(content))
-			}
-		} else if err == nil && lockInDb != redisLock.lockId {
-			log.Printf(
-				"Lock is lost. Discarding content (%s). Existing lockId: %s, my lockId: %s",
-				url, lockInDb, redisLock.lockId)
-		} else if err == redis.Nil {
-			log.Printf(
-				"Lock is lost. Discarding content (%s). Existing lockId: %s, my lockId: %s",
-				url, lockInDb, redisLock.lockId)
-		} else { // err != nil
-			log.Printf("Error in verifying lock ownership (URL: %s, lockId: %s): %v", url, redisLock.lockId, err)
+func (r *RedisCacheDB) WriterForLocked(lock Lock) (chan string, error) {
+	if lock != nil {
+		switch redisLock := lock.(type) {
+		case *RedisCacheLock:
+			return redisLock.writeChan, nil
+		default:
+			return nil, errors.New("Dev ERROR. Wrong lock object type")
 		}
 	} else {
-		// developer error
-		panic("Wrong Lock object type")
+		return nil, errors.New("Dev ERROR. Lock object is nil")
+	}
+}
+
+func (r *RedisCacheDB) Unlock(lock Lock, ttl time.Duration) error {
+	if lock != nil {
+		switch redisLock := lock.(type) {
+		case *RedisCacheLock:
+			ok, err := r.redisClient.Expire(redisLock.key, ttl).Result()
+			log.Printf("Setting TTL=$%v for %s: %t (%v)", ttl, redisLock.key, ok, err)
+			// redisLock.writeChan possible could be closed at this time.
+			defer func() {
+				if panicMessage := recover(); panicMessage != nil {
+					stack := debug.Stack()
+					log.Printf("RECOVERED FROM UNHANDLED PANIC: %v\nSTACK: %s", panicMessage, stack)
+				}
+			}()
+			close(redisLock.writeChan)
+			return nil
+		default:
+			return errors.New("Dev ERROR. Wrong lock object type")
+		}
+	} else {
+		return errors.New("Dev ERROR. Lock object is nil")
 	}
 }
 

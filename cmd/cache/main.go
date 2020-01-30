@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 )
 
 const App string = "2Services. Cache service"
@@ -51,8 +50,8 @@ func main() {
 			producer.Stop()
 		}()
 		log.Printf("Listening for incoming connections...")
-		a, b, c := producer.cacheDb.GetOrLock("qweqwe", 10*time.Second)
-		log.Printf("Ping: %v, %v, %v", a, b, c)
+		//a, b, c := producer.cacheDb.GetOrLock("qweqwe", 10*time.Second)
+		//log.Printf("Ping: %v, %v, %v", a, b, c)
 
 		err := producer.Serve(listener)
 		if err != nil {

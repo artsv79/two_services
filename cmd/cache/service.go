@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"github.com/artsv79/two_services/api"
 	"google.golang.org/grpc"
-	"io"
 	"log"
 	"math/rand"
-	"net/http"
 	"time"
 )
 
@@ -42,24 +40,30 @@ func (p *CacheService) GetRandomDataStream(input *api.RandomDataArg, server api.
 	log.Printf("Received request for arg: %d", input.Arg)
 
 	url := fmt.Sprintf("%020d", input.Arg)
-	str, err := p.getUrlContent(url)
+	ch, err := p.getUrlContent(url)
 	if err != nil {
 		log.Printf("Error getting URL: %v", err)
-		str = fmt.Sprintf("%v", err)
+		str := fmt.Sprintf("%v", err)
+		_ = server.Send(&api.RandomData{
+			Str: str,
+		})
+		return nil
 	}
 
-	err = server.Send(&api.RandomData{
-		Str: str,
-	})
-	if err != nil {
-		return err
+	for str := range ch {
+		err = server.Send(&api.RandomData{
+			Str: str,
+		})
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil
 }
 
-func (p *CacheService) getUrlContent(url string) (string, error) {
-	content, lock, err := p.cacheDb.GetOrLock(url, p.downloadTTL+100*time.Millisecond)
+func (p *CacheService) getUrlContent(url string) (chan string, error) {
+	contentFromDb, lock, err := p.cacheDb.GetOrLock(url, p.downloadTTL+100*time.Millisecond)
 	if lock != nil {
 		// generate content
 		var ttl time.Duration
@@ -67,48 +71,38 @@ func (p *CacheService) getUrlContent(url string) (string, error) {
 		ttlRange := p.config.MaxTimeout - p.config.MinTimeout
 		ttl = time.Duration(p.config.MinTimeout+rand.Intn(ttlRange+1)) * time.Second
 
-		strBuf := make([]byte, 0, 20*p.config.StreamLen)
-		for i := 0; i < p.config.StreamLen; i++ {
-			strBuf = append(strBuf, url...)
-		}
-		content = string(strBuf)
+		contentChan := make(chan string)
 
-		p.cacheDb.StoreAndUnlock(url, content, ttl, lock)
+		go func() {
+			defer close(contentChan)
+			defer p.cacheDb.Unlock(lock, ttl)
+			contentChan <- "generated:"
+			dbChan, err := p.cacheDb.WriterForLocked(lock)
+			if err != nil {
+				log.Printf("ERROR: %v", err)
+				return
+			}
+			for i := 0; i < p.config.StreamLen; i++ {
+				generated := url
+				contentChan <- generated
+				dbChan <- generated
+			}
+		}()
 
-		return "generated:" + content, nil
+		return contentChan, nil
+
 	} else if err != nil {
-		return "", err
+		return nil, err
 	} else {
 		// return content from cache
-		return "cached   :" + content, nil
-	}
-}
-
-func (p *CacheService) downloadURLContent(url string, timeout time.Duration) (string, error) {
-	log.Printf("Downloading (%s)...", url)
-	h := http.Client{
-		Transport:     nil,
-		CheckRedirect: nil,
-		Jar:           nil,
-		Timeout:       timeout,
-	}
-	resp, err := h.Get(url)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	contentLength := resp.ContentLength
-	if contentLength > p.maxContentSize || contentLength < 0 {
-		contentLength = p.maxContentSize
-	}
-
-	buf := make([]byte, contentLength)
-	readLen, err := resp.Body.Read(buf)
-	if (err == io.EOF || err == nil) && readLen >= 0 {
-		log.Printf("Downloaded (%s), len: %d", url, readLen)
-		return string(buf[:readLen]), nil
-	} else {
-		return "", err
+		contentChan := make(chan string)
+		go func() {
+			contentChan <- "cached   :"
+			for s := range contentFromDb {
+				contentChan <- s
+			}
+			close(contentChan)
+		}()
+		return contentChan, nil
 	}
 }
