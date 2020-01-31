@@ -6,6 +6,7 @@ import (
 	"google.golang.org/grpc"
 	"log"
 	"math/rand"
+	"strings"
 	"time"
 )
 
@@ -14,17 +15,15 @@ import (
 type CacheService struct {
 	*grpc.Server
 	api.UnimplementedCacheServer
-	config         Config
-	cacheDb        CacheDB
-	maxContentSize int64
-	downloadTTL    time.Duration
+	config      Config
+	cacheDb     CacheDB
+	downloadTTL time.Duration
 }
 
 func NewCache(config Config) *CacheService {
 	p := &CacheService{
-		config:         config,
-		maxContentSize: 1024 * 1024,
-		downloadTTL:    15 * time.Second,
+		config:      config,
+		downloadTTL: 60 * time.Second,
 	}
 
 	p.cacheDb = NewRedisCacheDB(config.dbAddress)
@@ -71,7 +70,7 @@ func (p *CacheService) getUrlContent(url string) (chan string, error) {
 		ttlRange := p.config.MaxTimeout - p.config.MinTimeout
 		ttl = time.Duration(p.config.MinTimeout+rand.Intn(ttlRange+1)) * time.Second
 
-		contentChan := make(chan string, 1000)
+		contentChan := make(chan string, 1)
 
 		go func() {
 			log.Printf("Start generating for %s", url)
@@ -83,10 +82,15 @@ func (p *CacheService) getUrlContent(url string) (chan string, error) {
 				log.Printf("ERROR: %v", err)
 				return
 			}
+			generated := strings.Builder{}
 			for i := 0; i < p.config.StreamLen; i++ {
-				generated := url
-				contentChan <- generated
-				dbChan <- generated
+				generated.WriteString(url)
+				if (i+1)%(p.config.StreamLen/10) == 0 {
+					generatedStr := generated.String()
+					contentChan <- generatedStr
+					dbChan <- generatedStr
+					generated = strings.Builder{}
+				}
 			}
 			log.Printf("Generation complete for %s", url)
 		}()
@@ -97,7 +101,7 @@ func (p *CacheService) getUrlContent(url string) (chan string, error) {
 		return nil, err
 	} else {
 		// return content from cache
-		contentChan := make(chan string)
+		contentChan := make(chan string, 1)
 		go func() {
 			defer close(contentChan)
 			log.Printf("Start reading stream for %s", url)

@@ -91,10 +91,10 @@ func (r *RedisCacheDB) GetOrLock(url string, lockTTL time.Duration) (chan string
 				// Good - we got the lock for this URL
 				log.Printf("Got lock %s (id=%s) for URL %s", lockId, id, key)
 				//TODO asv: handle timouts
-				ok, err := r.redisClient.Expire(key, lockTTL/4).Result()
-				log.Printf("Setting TTL=%v for %s: %t (%v)", lockTTL/4, key, ok, err)
+				ok, err := r.redisClient.Expire(key, lockTTL).Result()
+				log.Printf("Setting TTL=%v for %s: %t (%v)", lockTTL, key, ok, err)
 
-				wChan := make(chan string, 1000)
+				wChan := make(chan string, 1)
 				go func() {
 					recentId := firstId + 1 // next id for redis "XADD", will have form of "0-2", "0-3", and so forth
 					for item := range wChan {
@@ -127,7 +127,7 @@ func (r *RedisCacheDB) GetOrLock(url string, lockTTL time.Duration) (chan string
 			log.Printf("Got values for %s. Start reading...", key)
 			readTimeout := lockTTL / 4
 
-			readerChan := make(chan string)
+			readerChan := make(chan string, 1)
 
 			go func() {
 				defer close(readerChan)
