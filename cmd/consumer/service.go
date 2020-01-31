@@ -31,7 +31,7 @@ type ConsumerService struct {
 func NewConsumer(stop <-chan interface{}) *ConsumerService {
 	c := &ConsumerService{
 		stop:           stop,
-		requestTimeout: 30 * time.Second,
+		requestTimeout: 120 * time.Second,
 	}
 	return c
 }

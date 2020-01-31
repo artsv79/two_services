@@ -71,9 +71,10 @@ func (p *CacheService) getUrlContent(url string) (chan string, error) {
 		ttlRange := p.config.MaxTimeout - p.config.MinTimeout
 		ttl = time.Duration(p.config.MinTimeout+rand.Intn(ttlRange+1)) * time.Second
 
-		contentChan := make(chan string)
+		contentChan := make(chan string, 1000)
 
 		go func() {
+			log.Printf("Start generating for %s", url)
 			defer close(contentChan)
 			defer p.cacheDb.Unlock(lock, ttl)
 			contentChan <- "generated:"
@@ -87,6 +88,7 @@ func (p *CacheService) getUrlContent(url string) (chan string, error) {
 				contentChan <- generated
 				dbChan <- generated
 			}
+			log.Printf("Generation complete for %s", url)
 		}()
 
 		return contentChan, nil
@@ -97,11 +99,13 @@ func (p *CacheService) getUrlContent(url string) (chan string, error) {
 		// return content from cache
 		contentChan := make(chan string)
 		go func() {
+			defer close(contentChan)
+			log.Printf("Start reading stream for %s", url)
 			contentChan <- "cached   :"
 			for s := range contentFromDb {
 				contentChan <- s
 			}
-			close(contentChan)
+			log.Printf("Reading stream complete for %s", url)
 		}()
 		return contentChan, nil
 	}

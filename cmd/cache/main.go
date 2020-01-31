@@ -11,7 +11,7 @@ import (
 )
 
 const App string = "2Services. Cache service"
-const version string = "0.2.1"
+const version string = "0.3.3"
 
 func main() {
 	log.Printf("%s. Version %s", App, version)
